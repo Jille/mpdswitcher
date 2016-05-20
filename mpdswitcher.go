@@ -79,13 +79,13 @@ func main() {
 		for availableBackends == 0 {
 			unavailable.Wait()
 		}
-		mtx.Unlock()
 
 		var err error
 		sock, err = net.Listen("tcp", fmt.Sprintf(":%d", *port))
 		if err != nil {
 			log.Fatalf("Listen failed: %v", err)
 		}
+		mtx.Unlock()
 
 		for {
 			conn, err := sock.Accept()
