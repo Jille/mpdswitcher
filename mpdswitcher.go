@@ -38,6 +38,7 @@ var (
 	sock              net.Listener
 	recentToggles     int32
 	preferredBackend  int
+	trafficStats      int64
 )
 
 func main() {
@@ -214,6 +215,7 @@ func handleConnection(conn net.Conn) error {
 		scanner := bufio.NewScanner(io.TeeReader(mpd, conn))
 		for scanner.Scan() {
 			line := scanner.Text()
+			atomic.AddInt64(&trafficStats, int64(len(line)+1))
 			// fmt.Println(line)
 			if line == "OK" || strings.HasPrefix(line, "ACK") {
 				inStatus = false
@@ -232,9 +234,13 @@ func handleConnection(conn net.Conn) error {
 		scanner := bufio.NewScanner(io.TeeReader(conn, mpd))
 		for scanner.Scan() {
 			line := scanner.Text()
+			atomic.AddInt64(&trafficStats, int64(len(line)+1))
 			fmt.Println(line)
 			if line == "status" {
 				inStatus = true
+			}
+			if line == "mpdswitcher_stats" {
+				fmt.Fprintf(conn, "traffic_bytes: %d\n", atomic.LoadInt64(&trafficStats))
 			}
 			if strings.HasPrefix(line, "play") || strings.HasPrefix(line, "pause") {
 				mtx.Lock()
