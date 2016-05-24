@@ -242,14 +242,14 @@ func handleConnection(conn net.Conn) error {
 			if line == "mpdswitcher_stats" {
 				fmt.Fprintf(conn, "traffic_bytes: %d\n", atomic.LoadInt64(&trafficStats))
 			}
-			if strings.HasPrefix(line, "play") || strings.HasPrefix(line, "pause") {
+			if line == "play" || strings.HasPrefix(line, "playid ") || strings.HasPrefix(line, "pause") {
 				mtx.Lock()
 				wantPlaying := backendStates[choice] != statePlaying
 				mtx.Unlock()
-				if strings.HasPrefix(line, "play") != strings.Contains(line, "1") {
+				if (line == "play" || strings.HasPrefix(line, "playid")) != (strings.HasPrefix(line, "pause") && strings.Contains(line, "1")) {
 					wantPlaying = false
 					setAvailability(choice, statePaused)
-				} else if strings.Contains(line, "0") {
+				} else if strings.HasPrefix(line, "pause") && strings.Contains(line, "0") {
 					wantPlaying = true
 					mtx.Lock()
 					preferredBackend = choice
