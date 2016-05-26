@@ -119,7 +119,7 @@ func setAvailability(id int, state backendStatus) {
 			if availableBackends == 0 {
 				sock.Close()
 			}
-		} else {
+		} else if backendStates[id] == stateDown {
 			availableBackends++
 			if availableBackends == 1 {
 				unavailable.Broadcast()
