@@ -23,14 +23,18 @@ const (
 	statePlaying
 )
 
+type backend struct {
+	addr     string
+	password string
+	state    backendStatus
+}
+
 var (
 	port         = flag.Int("port", 6600, "Port to run on")
-	backends     = flag.String("backends", "", "Backends to support")
+	backendsFlag = flag.String("backends", "", "Backends to support")
 	backendsFile = flag.String("backends_file", "", "File with more backends to support")
 
-	backendAddrs     []string
-	backendPasswords []string
-	backendStates    []backendStatus
+	backends []backend
 
 	availableBackends int
 	mtx               sync.Mutex
@@ -43,7 +47,7 @@ var (
 
 func main() {
 	flag.Parse()
-	b := strings.Split(*backends, ",")
+	b := strings.Split(*backendsFlag, ",")
 	if *backendsFile != "" {
 		d, err := ioutil.ReadFile(*backendsFile)
 		if err != nil {
@@ -56,22 +60,22 @@ func main() {
 		if addr == "" {
 			continue
 		}
+		be := backend{
+			addr: addr,
+		}
 		ex := strings.Split(addr, "@")
 		if len(ex) == 2 {
-			backendAddrs = append(backendAddrs, ex[1])
-			backendPasswords = append(backendPasswords, ex[0])
-		} else {
-			backendPasswords = append(backendPasswords, "")
-			backendAddrs = append(backendAddrs, ex[0])
+			be.addr = ex[1]
+			be.password = ex[0]
 		}
-		backendStates = append(backendStates, stateDown)
+		backends = append(backends, be)
 	}
 
-	if len(backendAddrs) == 0 {
+	if len(backends) == 0 {
 		log.Fatal("No backends specified")
 	}
 
-	for id := range backendAddrs {
+	for id := range backends {
 		go handleBackend(id)
 	}
 
@@ -112,25 +116,25 @@ func main() {
 func setAvailability(id int, state backendStatus) {
 	mtx.Lock()
 	defer mtx.Unlock()
-	fmt.Printf("State[%s #%d]: %d\n", backendAddrs[id], id, state)
-	if state != backendStates[id] {
+	fmt.Printf("State[%s #%d]: %d\n", backends[id].addr, id, state)
+	if state != backends[id].state {
 		if state == stateDown {
 			availableBackends--
 			if availableBackends == 0 {
 				sock.Close()
 			}
-		} else if backendStates[id] == stateDown {
+		} else if backends[id].state == stateDown {
 			availableBackends++
 			if availableBackends == 1 {
 				unavailable.Broadcast()
 			}
 		}
 	}
-	backendStates[id] = state
+	backends[id].state = state
 }
 
 func handleBackend(id int) {
-	addr := backendAddrs[id]
+	addr := backends[id].addr
 	for {
 		state, err := getBackendStatus(id)
 		fmt.Printf("State[%s]: %d (%v)\n", addr, state, err)
@@ -143,7 +147,7 @@ func handleBackend(id int) {
 }
 
 func getBackendStatus(id int) (backendStatus, error) {
-	conn, err := net.Dial("tcp", backendAddrs[id])
+	conn, err := net.Dial("tcp", backends[id].addr)
 	if err != nil {
 		return stateDown, err
 	}
@@ -156,8 +160,8 @@ func getBackendStatus(id int) (backendStatus, error) {
 	if !strings.HasPrefix(line, "OK MPD ") {
 		return stateDown, fmt.Errorf("Got a weird greeting: %s", line)
 	}
-	if backendPasswords[id] != "" {
-		fmt.Fprintf(conn, "password %s\n", backendPasswords[id])
+	if backends[id].password != "" {
+		fmt.Fprintf(conn, "password %s\n", backends[id].password)
 		if !scanner.Scan() {
 			return stateDown, scanner.Err()
 		}
@@ -185,23 +189,23 @@ func handleConnection(conn net.Conn) error {
 	for {
 		mtx.Lock()
 	Loop:
-		for id, state := range backendStates {
-			switch state {
+		for id, be := range backends {
+			switch be.state {
 			case statePlaying:
 				choice = id
 				break Loop
 			case statePaused:
-				if backendStates[choice] == stateDown {
+				if backends[choice].state == stateDown {
 					choice = id
 				}
 			}
 		}
 		mtx.Unlock()
-		if backendStates[choice] == stateDown {
+		if backends[choice].state == stateDown {
 			return errors.New("No backend available")
 		}
 		var err error
-		mpd, err = net.Dial("tcp", backendAddrs[choice])
+		mpd, err = net.Dial("tcp", backends[choice].addr)
 		if err != nil {
 			setAvailability(choice, stateDown)
 			return err
@@ -244,7 +248,7 @@ func handleConnection(conn net.Conn) error {
 			}
 			if line == "play" || strings.HasPrefix(line, "playid ") || strings.HasPrefix(line, "pause") {
 				mtx.Lock()
-				wantPlaying := backendStates[choice] != statePlaying
+				wantPlaying := backends[choice].state != statePlaying
 				mtx.Unlock()
 				if (line == "play" || strings.HasPrefix(line, "playid")) != (strings.HasPrefix(line, "pause") && strings.Contains(line, "1")) {
 					wantPlaying = false
@@ -264,7 +268,7 @@ func handleConnection(conn net.Conn) error {
 				}()
 				if v >= 4 && v <= 5 && !wantPlaying {
 					mtx.Lock()
-					preferredBackend = (choice + 1) % len(backendAddrs)
+					preferredBackend = (choice + 1) % len(backends)
 					fmt.Printf("New preferred backend: %d\n", preferredBackend)
 					mtx.Unlock()
 					break
